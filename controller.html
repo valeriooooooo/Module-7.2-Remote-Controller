@@ -10,7 +10,7 @@
 <button onclick="send('right')">Right</button>
 
 <script>
-const socket = new WebSocket('ws://10.16.30.213:8080');
+const socket = new WebSocket(`ws://${location.hostname}:8080`);
 
 socket.onopen = () => {
   socket.send(JSON.stringify({ type: 'phone' }));
