@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<body style="margin:0; background:black; color:white;">
+
+<h2>Controller</h2>
+
+<button onclick="send('forward')">Forward</button>
+<button onclick="send('backward')">Back</button>
+<button onclick="send('left')">Left</button>
+<button onclick="send('right')">Right</button>
+
+<script>
+const socket = new WebSocket('ws://10.16.30.213:8080');
+
+socket.onopen = () => {
+  socket.send(JSON.stringify({ type: 'phone' }));
+};
+
+function send(direction) {
+  socket.send(JSON.stringify({
+    type: 'joystick',
+    direction: direction
+  }));
+}
+</script>
+
+</body>
+</html>
