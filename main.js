@@ -4,6 +4,8 @@ socket.onopen = () => {
   socket.send(JSON.stringify({ type: 'laptop' }));
 };
 
+let input = { x: 0, y: 0, direction: 'stop' };
+
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 
 // scene
@@ -57,7 +59,7 @@ window.addEventListener('keyup', (e) => {
 });
 
 // movement settings
-let speed = 0.1;
+const speed = 0.1;
 
 // animatie
 function animate() {
@@ -68,6 +70,10 @@ if (input.direction === 'forward') drone.position.z -= speed;
 if (input.direction === 'backward') drone.position.z += speed;
 if (input.direction === 'left') drone.position.x -= speed;
 if (input.direction === 'right') drone.position.x += speed;
+
+if (input.direction === 'stop') {
+  // niks doen → stopt automatisch
+}
 
   // camera volgt drone
   camera.position.x = drone.position.x;
@@ -80,8 +86,6 @@ if (input.direction === 'right') drone.position.x += speed;
 }
 
 animate();
-
-let input = {};
 
 socket.onmessage = (event) => {
   const data = JSON.parse(event.data);

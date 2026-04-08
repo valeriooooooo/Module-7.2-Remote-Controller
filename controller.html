@@ -1,27 +1,78 @@
 <!DOCTYPE html>
 <html>
-<body style="margin:0; background:black; color:white;">
+<body style="margin:0; overflow:hidden; background:black;">
 
-<h2>Controller</h2>
-
-<button onclick="send('forward')">Forward</button>
-<button onclick="send('backward')">Back</button>
-<button onclick="send('left')">Left</button>
-<button onclick="send('right')">Right</button>
+<div id="joystickBase"></div>
+<div id="joystickThumb"></div>
 
 <script>
-const socket = new WebSocket(`ws://${location.hostname}:8080`);
+const socket = new WebSocket('ws://192.168.x.x:8080'); // jouw IP
 
 socket.onopen = () => {
   socket.send(JSON.stringify({ type: 'phone' }));
 };
 
-function send(direction) {
+const base = document.getElementById('joystickBase');
+const thumb = document.getElementById('joystickThumb');
+
+base.style.position = 'absolute';
+base.style.width = '150px';
+base.style.height = '150px';
+base.style.borderRadius = '50%';
+base.style.background = '#333';
+base.style.left = '50px';
+base.style.bottom = '50px';
+
+thumb.style.position = 'absolute';
+thumb.style.width = '60px';
+thumb.style.height = '60px';
+thumb.style.borderRadius = '50%';
+thumb.style.background = '#aaa';
+thumb.style.left = '95px';
+thumb.style.bottom = '95px';
+
+let dragging = false;
+
+base.addEventListener('touchstart', () => dragging = true);
+base.addEventListener('touchend', () => {
+  dragging = false;
+
   socket.send(JSON.stringify({
     type: 'joystick',
-    direction: direction
+    x: 0,
+    y: 0
   }));
-}
+
+  thumb.style.left = '95px';
+  thumb.style.bottom = '95px';
+});
+
+base.addEventListener('touchmove', (e) => {
+  if (!dragging) return;
+
+  const touch = e.touches[0];
+
+  const rect = base.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+
+  let dx = touch.clientX - centerX;
+  let dy = touch.clientY - centerY;
+
+  const max = 50;
+
+  dx = Math.max(-max, Math.min(max, dx));
+  dy = Math.max(-max, Math.min(max, dy));
+
+  thumb.style.left = (centerX + dx - 30) + 'px';
+  thumb.style.top = (centerY + dy - 30) + 'px';
+
+  socket.send(JSON.stringify({
+    type: 'joystick',
+    x: dx / max,
+    y: dy / max
+  }));
+});
 </script>
 
 </body>
