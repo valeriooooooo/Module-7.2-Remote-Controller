@@ -1,78 +1,324 @@
 <!DOCTYPE html>
 <html>
-<body style="margin:0; overflow:hidden; background:black;">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<style>
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: #080808;
+    touch-action: none;
+    font-family: sans-serif;
+    color: #fff;
+  }
 
-<div id="joystickBase"></div>
-<div id="joystickThumb"></div>
+  #hint {
+    position: absolute;
+    left: 50%;
+    top: 14px;
+    transform: translateX(-50%);
+    opacity: 0.8;
+    font-size: 15px;
+    text-align: center;
+    width: 90vw;
+  }
+
+  #landscapeWarning {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    background: rgba(0, 0, 0, 0.92);
+    color: #fff;
+    font-size: 20px;
+    padding: 24px;
+    z-index: 20;
+  }
+
+  .controls {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(96vw, 980px);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: min(7vw, 64px);
+  }
+
+  .joystick-base {
+    position: relative;
+    width: min(33vw, 230px);
+    height: min(33vw, 230px);
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #505050, #2a2a2a);
+    border: 2px solid #777;
+  }
+
+  .joystick-thumb {
+    position: absolute;
+    width: min(14vw, 96px);
+    height: min(14vw, 96px);
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #ffffff, #bfbfbf);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+
+  .altitude {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .altitude button {
+    width: min(24vw, 130px);
+    height: min(16vw, 88px);
+    border: 0;
+    border-radius: 14px;
+    font-size: clamp(15px, 3.2vw, 20px);
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(180deg, #393939, #1f1f1f);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  }
+
+  .altitude button:active {
+    transform: scale(0.98);
+    background: linear-gradient(180deg, #4a4a4a, #272727);
+  }
+
+  @media (max-height: 500px) {
+    .controls {
+      gap: min(5vw, 40px);
+    }
+
+    .joystick-base {
+      width: min(30vw, 190px);
+      height: min(30vw, 190px);
+    }
+  }
+</style>
+</head>
+<body>
+
+<div id="hint">Links: bewegen, Rechts: camera, Knoppen: omhoog/omlaag</div>
+<div id="landscapeWarning">Draai je telefoon horizontaal voor betere joystick-besturing</div>
+
+<div class="controls">
+  <div id="leftBase" class="joystick-base">
+    <div id="leftThumb" class="joystick-thumb"></div>
+  </div>
+  <div class="altitude">
+    <button id="upBtn" type="button">UP</button>
+    <button id="downBtn" type="button">DOWN</button>
+  </div>
+  <div id="rightBase" class="joystick-base">
+    <div id="rightThumb" class="joystick-thumb"></div>
+  </div>
+</div>
 
 <script>
-const socket = new WebSocket('ws://192.168.x.x:8080'); // jouw IP
+const socket = new WebSocket(`ws://${location.hostname}:8080`);
 
 socket.onopen = () => {
   socket.send(JSON.stringify({ type: 'phone' }));
 };
 
-const base = document.getElementById('joystickBase');
-const thumb = document.getElementById('joystickThumb');
+const warning = document.getElementById('landscapeWarning');
+const upBtn = document.getElementById('upBtn');
+const downBtn = document.getElementById('downBtn');
+const altitude = { up: false, down: false };
 
-base.style.position = 'absolute';
-base.style.width = '150px';
-base.style.height = '150px';
-base.style.borderRadius = '50%';
-base.style.background = '#333';
-base.style.left = '50px';
-base.style.bottom = '50px';
+function setOrientationState() {
+  warning.style.display = window.innerWidth > window.innerHeight ? 'none' : 'flex';
+}
 
-thumb.style.position = 'absolute';
-thumb.style.width = '60px';
-thumb.style.height = '60px';
-thumb.style.borderRadius = '50%';
-thumb.style.background = '#aaa';
-thumb.style.left = '95px';
-thumb.style.bottom = '95px';
-
-let dragging = false;
-
-base.addEventListener('touchstart', () => dragging = true);
-base.addEventListener('touchend', () => {
-  dragging = false;
-
-  socket.send(JSON.stringify({
-    type: 'joystick',
+function createJoystick(base, thumb) {
+  return {
+    base,
+    thumb,
+    activeId: null,
+    centerX: 0,
+    centerY: 0,
+    max: 0,
     x: 0,
     y: 0
-  }));
+  };
+}
 
-  thumb.style.left = '95px';
-  thumb.style.bottom = '95px';
-});
+const left = createJoystick(
+  document.getElementById('leftBase'),
+  document.getElementById('leftThumb')
+);
+const right = createJoystick(
+  document.getElementById('rightBase'),
+  document.getElementById('rightThumb')
+);
 
-base.addEventListener('touchmove', (e) => {
-  if (!dragging) return;
+function recalcOne(stick) {
+  const rect = stick.base.getBoundingClientRect();
+  stick.centerX = rect.left + rect.width / 2;
+  stick.centerY = rect.top + rect.height / 2;
+  stick.max = rect.width * 0.34;
+  if (stick.activeId === null) {
+    stick.thumb.style.left = '50%';
+    stick.thumb.style.top = '50%';
+    stick.thumb.style.transform = 'translate(-50%, -50%)';
+  }
+}
 
-  const touch = e.touches[0];
+function recalcAll() {
+  recalcOne(left);
+  recalcOne(right);
+  setOrientationState();
+}
 
-  const rect = base.getBoundingClientRect();
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
+function applyThumb(stick, dx, dy) {
+  const len = Math.hypot(dx, dy);
+  let nx = dx;
+  let ny = dy;
 
-  let dx = touch.clientX - centerX;
-  let dy = touch.clientY - centerY;
+  if (len > stick.max) {
+    nx = (dx / len) * stick.max;
+    ny = (dy / len) * stick.max;
+  }
 
-  const max = 50;
+  stick.x = nx / stick.max;
+  stick.y = ny / stick.max;
 
-  dx = Math.max(-max, Math.min(max, dx));
-  dy = Math.max(-max, Math.min(max, dy));
+  const thumbRect = stick.thumb.getBoundingClientRect();
+  const thumbHalf = thumbRect.width / 2;
+  stick.thumb.style.left = (stick.centerX + nx - thumbHalf) + 'px';
+  stick.thumb.style.top = (stick.centerY + ny - thumbHalf) + 'px';
+  stick.thumb.style.transform = 'none';
+}
 
-  thumb.style.left = (centerX + dx - 30) + 'px';
-  thumb.style.top = (centerY + dy - 30) + 'px';
+function resetStick(stick) {
+  stick.activeId = null;
+  stick.x = 0;
+  stick.y = 0;
+  stick.thumb.style.left = '50%';
+  stick.thumb.style.top = '50%';
+  stick.thumb.style.transform = 'translate(-50%, -50%)';
+}
 
+function emitInput() {
   socket.send(JSON.stringify({
     type: 'joystick',
-    x: dx / max,
-    y: dy / max
+    x: left.x,
+    y: left.y,
+    rx: right.x,
+    ry: right.y,
+    up: altitude.up,
+    down: altitude.down
   }));
-});
+}
+
+function bindHoldButton(button, key) {
+  const start = (e) => {
+    e.preventDefault();
+    altitude[key] = true;
+    emitInput();
+  };
+
+  const stop = (e) => {
+    e.preventDefault();
+    altitude[key] = false;
+    emitInput();
+  };
+
+  button.addEventListener('touchstart', start, { passive: false });
+  button.addEventListener('touchend', stop, { passive: false });
+  button.addEventListener('touchcancel', stop, { passive: false });
+  button.addEventListener('mousedown', start);
+  button.addEventListener('mouseup', stop);
+  button.addEventListener('mouseleave', stop);
+}
+
+function findTouchById(touchList, id) {
+  for (const t of touchList) {
+    if (t.identifier === id) return t;
+  }
+  return null;
+}
+
+function startStick(stick, touch) {
+  stick.activeId = touch.identifier;
+  recalcOne(stick);
+  applyThumb(stick, touch.clientX - stick.centerX, touch.clientY - stick.centerY);
+  emitInput();
+}
+
+left.base.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (left.activeId !== null) return;
+  startStick(left, e.changedTouches[0]);
+}, { passive: false });
+
+right.base.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (right.activeId !== null) return;
+  startStick(right, e.changedTouches[0]);
+}, { passive: false });
+
+window.addEventListener('touchmove', (e) => {
+  if (left.activeId === null && right.activeId === null) return;
+  e.preventDefault();
+
+  if (left.activeId !== null) {
+    const t = findTouchById(e.touches, left.activeId);
+    if (t) applyThumb(left, t.clientX - left.centerX, t.clientY - left.centerY);
+  }
+
+  if (right.activeId !== null) {
+    const t = findTouchById(e.touches, right.activeId);
+    if (t) applyThumb(right, t.clientX - right.centerX, t.clientY - right.centerY);
+  }
+
+  emitInput();
+}, { passive: false });
+
+window.addEventListener('touchend', (e) => {
+  let changed = false;
+  for (const t of e.changedTouches) {
+    if (t.identifier === left.activeId) {
+      resetStick(left);
+      changed = true;
+    }
+    if (t.identifier === right.activeId) {
+      resetStick(right);
+      changed = true;
+    }
+  }
+  if (changed) emitInput();
+}, { passive: false });
+
+window.addEventListener('touchcancel', (e) => {
+  let changed = false;
+  for (const t of e.changedTouches) {
+    if (t.identifier === left.activeId) {
+      resetStick(left);
+      changed = true;
+    }
+    if (t.identifier === right.activeId) {
+      resetStick(right);
+      changed = true;
+    }
+  }
+  if (changed) emitInput();
+}, { passive: false });
+
+bindHoldButton(upBtn, 'up');
+bindHoldButton(downBtn, 'down');
+
+window.addEventListener('resize', recalcAll);
+window.addEventListener('load', recalcAll);
 </script>
 
 </body>
