@@ -1,13 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <style>
   body {
     margin: 0;
     overflow: hidden;
     background: #080808;
     touch-action: none;
+    -webkit-text-size-adjust: 100%;
     font-family: sans-serif;
     color: #fff;
   }
@@ -147,6 +148,10 @@ function createJoystick(base, thumb) {
     centerX: 0,
     centerY: 0,
     max: 0,
+    startRadius: 0,
+    centerDeadZone: 0,
+    thumbHalf: 0,
+    baseHalf: 0,
     x: 0,
     y: 0
   };
@@ -165,7 +170,11 @@ function recalcOne(stick) {
   const rect = stick.base.getBoundingClientRect();
   stick.centerX = rect.left + rect.width / 2;
   stick.centerY = rect.top + rect.height / 2;
-  stick.max = rect.width * 0.34;
+  stick.baseHalf = rect.width / 2;
+  stick.thumbHalf = stick.thumb.getBoundingClientRect().width / 2;
+  stick.max = rect.width * 0.26;
+  stick.startRadius = rect.width * 0.44;
+  stick.centerDeadZone = stick.max * 0.16;
   if (stick.activeId === null) {
     stick.thumb.style.left = '50%';
     stick.thumb.style.top = '50%';
@@ -181,6 +190,16 @@ function recalcAll() {
 
 function applyThumb(stick, dx, dy) {
   const len = Math.hypot(dx, dy);
+
+  if (len < stick.centerDeadZone) {
+    stick.x = 0;
+    stick.y = 0;
+    stick.thumb.style.left = '50%';
+    stick.thumb.style.top = '50%';
+    stick.thumb.style.transform = 'translate(-50%, -50%)';
+    return;
+  }
+
   let nx = dx;
   let ny = dy;
 
@@ -192,10 +211,8 @@ function applyThumb(stick, dx, dy) {
   stick.x = nx / stick.max;
   stick.y = ny / stick.max;
 
-  const thumbRect = stick.thumb.getBoundingClientRect();
-  const thumbHalf = thumbRect.width / 2;
-  stick.thumb.style.left = (stick.centerX + nx - thumbHalf) + 'px';
-  stick.thumb.style.top = (stick.centerY + ny - thumbHalf) + 'px';
+  stick.thumb.style.left = (stick.baseHalf + nx - stick.thumbHalf) + 'px';
+  stick.thumb.style.top = (stick.baseHalf + ny - stick.thumbHalf) + 'px';
   stick.thumb.style.transform = 'none';
 }
 
@@ -249,21 +266,31 @@ function findTouchById(touchList, id) {
 }
 
 function startStick(stick, touch) {
+  const dx = touch.clientX - stick.centerX;
+  const dy = touch.clientY - stick.centerY;
+  const distFromCenter = Math.hypot(dx, dy);
+  if (distFromCenter > stick.startRadius) return;
+
   stick.activeId = touch.identifier;
-  recalcOne(stick);
-  applyThumb(stick, touch.clientX - stick.centerX, touch.clientY - stick.centerY);
+  stick.x = 0;
+  stick.y = 0;
+  stick.thumb.style.left = '50%';
+  stick.thumb.style.top = '50%';
+  stick.thumb.style.transform = 'translate(-50%, -50%)';
   emitInput();
 }
 
 left.base.addEventListener('touchstart', (e) => {
   e.preventDefault();
   if (left.activeId !== null) return;
+  recalcOne(left);
   startStick(left, e.changedTouches[0]);
 }, { passive: false });
 
 right.base.addEventListener('touchstart', (e) => {
   e.preventDefault();
   if (right.activeId !== null) return;
+  recalcOne(right);
   startStick(right, e.changedTouches[0]);
 }, { passive: false });
 
@@ -316,6 +343,10 @@ window.addEventListener('touchcancel', (e) => {
 
 bindHoldButton(upBtn, 'up');
 bindHoldButton(downBtn, 'down');
+
+window.addEventListener('gesturestart', (e) => e.preventDefault());
+window.addEventListener('gesturechange', (e) => e.preventDefault());
+window.addEventListener('gestureend', (e) => e.preventDefault());
 
 window.addEventListener('resize', recalcAll);
 window.addEventListener('load', recalcAll);

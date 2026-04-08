@@ -6,6 +6,16 @@ socket.onopen = () => {
 
 let input = { x: 0, y: 0, rx: 0, ry: 0, up: false, down: false };
 
+const CONTROL_TUNING = {
+  moveSpeed: 0.1,
+  verticalSpeed: 0.08,
+  moveDeadZone: 0.08,
+  lookDeadZone: 0.22,
+  lookSmoothing: 0.16,
+  lookYawSpeed: 0.014,
+  lookPitchSpeed: 0.011
+};
+
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 
 // scene
@@ -59,34 +69,36 @@ window.addEventListener('keyup', (e) => {
 });
 
 // movement settings
-const speed = 0.1;
-const verticalSpeed = 0.08;
 const cameraDistance = 5;
 const cameraHeightOffset = 2;
 let cameraYaw = 0;
 let cameraPitch = 0.35;
+let lookXFiltered = 0;
+let lookYFiltered = 0;
 
 // animatie
 function animate() {
   requestAnimationFrame(animate);
 
   // Move with analog joystick input from phone.
-  const deadZone = 0.05;
-  const moveX = Math.abs(input.x || 0) > deadZone ? (input.x || 0) : 0;
-  const moveY = Math.abs(input.y || 0) > deadZone ? (input.y || 0) : 0;
-  drone.position.x += moveX * speed;
-  drone.position.z += moveY * speed;
+  const moveX = Math.abs(input.x || 0) > CONTROL_TUNING.moveDeadZone ? (input.x || 0) : 0;
+  const moveY = Math.abs(input.y || 0) > CONTROL_TUNING.moveDeadZone ? (input.y || 0) : 0;
+  drone.position.x += moveX * CONTROL_TUNING.moveSpeed;
+  drone.position.z += moveY * CONTROL_TUNING.moveSpeed;
 
-  if (input.up) drone.position.y += verticalSpeed;
-  if (input.down) drone.position.y -= verticalSpeed;
+  if (input.up) drone.position.y += CONTROL_TUNING.verticalSpeed;
+  if (input.down) drone.position.y -= CONTROL_TUNING.verticalSpeed;
   drone.position.y = Math.max(0.6, Math.min(10, drone.position.y));
 
   // Right joystick controls camera orbit around the drone.
-  const lookX = Math.abs(input.rx || 0) > deadZone ? (input.rx || 0) : 0;
-  const lookY = Math.abs(input.ry || 0) > deadZone ? (input.ry || 0) : 0;
+  const lookX = Math.abs(input.rx || 0) > CONTROL_TUNING.lookDeadZone ? (input.rx || 0) : 0;
+  const lookY = Math.abs(input.ry || 0) > CONTROL_TUNING.lookDeadZone ? (input.ry || 0) : 0;
 
-  cameraYaw -= lookX * 0.05;
-  cameraPitch = Math.max(-0.6, Math.min(1.1, cameraPitch - lookY * 0.03));
+  lookXFiltered += (lookX - lookXFiltered) * CONTROL_TUNING.lookSmoothing;
+  lookYFiltered += (lookY - lookYFiltered) * CONTROL_TUNING.lookSmoothing;
+
+  cameraYaw -= lookXFiltered * CONTROL_TUNING.lookYawSpeed;
+  cameraPitch = Math.max(-0.6, Math.min(1.1, cameraPitch - lookYFiltered * CONTROL_TUNING.lookPitchSpeed));
 
   const cosPitch = Math.cos(cameraPitch);
   const sinPitch = Math.sin(cameraPitch);
