@@ -1,0 +1,11 @@
+Model Information:
+* title:	Zala_421_16E2
+* source:	https://sketchfab.com/3d-models/zala-421-16e2-25c8c177042340238af814ded16ca24b
+* author:	Viktor_ (https://sketchfab.com/Viktor.Zhuravlev)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Zala_421_16E2" (https://sketchfab.com/3d-models/zala-421-16e2-25c8c177042340238af814ded16ca24b) by Viktor_ (https://sketchfab.com/Viktor.Zhuravlev) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
