@@ -2,10 +2,27 @@ const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const PORT = 8080;
 const HOST = '0.0.0.0';
 const rootDir = path.join(__dirname, '..');
+
+function getLanIPv4Addresses() {
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+
+  for (const ifaceName of Object.keys(interfaces)) {
+    const entries = interfaces[ifaceName] || [];
+    for (const entry of entries) {
+      if (entry && entry.family === 'IPv4' && !entry.internal) {
+        addresses.push(entry.address);
+      }
+    }
+  }
+
+  return [...new Set(addresses)];
+}
 
 const server = http.createServer((req, res) => {
   const requested = req.url === '/' ? '/controller.html' : req.url;
@@ -66,6 +83,16 @@ wss.on('connection', (ws) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Server running on http://10.16.30.213:${PORT}`);
-  console.log(`Controller URL: http://10.16.30.213:${PORT}/controller.html`);
+  console.log(`Server listening on 0.0.0.0:${PORT}`);
+  console.log(`Local controller URL: http://localhost:${PORT}/controller.html`);
+
+  const lanIps = getLanIPv4Addresses();
+  if (lanIps.length === 0) {
+    console.log('No LAN IPv4 address detected.');
+    return;
+  }
+
+  for (const ip of lanIps) {
+    console.log(`Controller URL (phone): http://${ip}:${PORT}/controller.html`);
+  }
 });

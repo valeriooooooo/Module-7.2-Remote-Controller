@@ -4,7 +4,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 const loader = new GLTFLoader();
 let droneModel = null;
 
-const socket = new WebSocket('ws://localhost:8080');
+const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+const wsHost = window.location.hostname || 'localhost';
+const socket = new WebSocket(`${wsProtocol}://${wsHost}:8080`);
 
 socket.onopen = () => {
   socket.send(JSON.stringify({ type: 'laptop' }));
@@ -66,6 +68,341 @@ function createTree(x, z) {
 const buildings = [];
 const trees = [];
 const rocks = [];
+const collectibles = [];
+const rings = [];
+
+let score = 0;
+const TOTAL_COLLECTIBLES = 28;
+const TOTAL_BOOST_RINGS = 7;
+const GAME_DURATION_SECONDS = 60;
+const TIME_BONUS_PER_COLLECT_MS = 10000;
+const BOOST_DURATION_MS = 10000;
+const BOOST_MULTIPLIER = 1.55;
+const MAX_GAME_TIME_SECONDS = 120;
+let gameEndTime = performance.now() + GAME_DURATION_SECONDS * 1000;
+let speedBoostEndTime = 0;
+let gameOver = false;
+let remainingCollectibles = 0;
+let boostFlashes = [];
+
+const hud = document.createElement('div');
+hud.style.position = 'fixed';
+hud.style.top = '16px';
+hud.style.left = '16px';
+hud.style.padding = '10px 14px';
+hud.style.borderRadius = '10px';
+hud.style.background = 'rgba(0, 0, 0, 0.55)';
+hud.style.color = '#ffffff';
+hud.style.fontFamily = 'Verdana, sans-serif';
+hud.style.fontSize = '18px';
+hud.style.fontWeight = '700';
+hud.style.letterSpacing = '0.4px';
+hud.style.userSelect = 'none';
+hud.style.zIndex = '10';
+document.body.appendChild(hud);
+
+function updateHud() {
+  const now = performance.now();
+  const timeLeft = Math.max(0, Math.ceil((gameEndTime - now) / 1000));
+  const boostLeft = Math.max(0, Math.ceil((speedBoostEndTime - now) / 1000));
+  const boostText = boostLeft > 0 ? ` | Boost: ${boostLeft}s` : '';
+  hud.textContent = `Score: ${score} | Over: ${remainingCollectibles} | Tijd: ${timeLeft}s${boostText}`;
+}
+
+const gameOverOverlay = document.createElement('div');
+gameOverOverlay.style.position = 'fixed';
+gameOverOverlay.style.inset = '0';
+gameOverOverlay.style.display = 'none';
+gameOverOverlay.style.alignItems = 'center';
+gameOverOverlay.style.justifyContent = 'center';
+gameOverOverlay.style.background = 'rgba(6, 10, 18, 0.72)';
+gameOverOverlay.style.color = '#ffffff';
+gameOverOverlay.style.fontFamily = 'Verdana, sans-serif';
+gameOverOverlay.style.textAlign = 'center';
+gameOverOverlay.style.zIndex = '20';
+document.body.appendChild(gameOverOverlay);
+
+function showGameOver(message) {
+  gameOverOverlay.innerHTML = `
+    <div style="padding: 22px 28px; border-radius: 14px; background: rgba(0, 0, 0, 0.55); min-width: 300px;">
+      <h2 style="margin: 0 0 10px; font-size: 30px;">Game Over</h2>
+      <p style="margin: 0 0 8px; font-size: 18px;">${message}</p>
+      <p style="margin: 0 0 16px; font-size: 22px; font-weight: 700;">Eindscore: ${score}</p>
+      <p style="margin: 0; font-size: 14px; opacity: 0.9;">Druk op R om opnieuw te starten</p>
+    </div>
+  `;
+  gameOverOverlay.style.display = 'flex';
+}
+
+function clearCollectibles() {
+  for (const collectible of collectibles) {
+    collectible.active = false;
+    collectible.mesh.visible = false;
+    collectible.light.visible = false;
+    collectible.light.intensity = 0;
+  }
+  collectibles.length = 0;
+  remainingCollectibles = 0;
+}
+
+function clearRings() {
+  for (const ring of rings) {
+    ring.active = false;
+    ring.group.visible = false;
+  }
+  rings.length = 0;
+}
+
+function createBoostFlash() {
+  const flashGeo = new THREE.SphereGeometry(1.5, 8, 8);
+  const flashMat = new THREE.MeshBasicMaterial({
+    color: 0xffdd33,
+    transparent: true,
+    opacity: 0.8,
+    side: THREE.BackSide
+  });
+  const flashMesh = new THREE.Mesh(flashGeo, flashMat);
+  flashMesh.position.copy(drone.position.clone());
+  scene.add(flashMesh);
+
+  boostFlashes.push({
+    mesh: flashMesh,
+    birthTime: performance.now(),
+    duration: 280,
+    done: false
+  });
+}
+
+function restartGame() {
+  score = 0;
+  gameOver = false;
+  speedBoostEndTime = 0;
+  gameEndTime = Math.min(
+    performance.now() + GAME_DURATION_SECONDS * 1000,
+    performance.now() + MAX_GAME_TIME_SECONDS * 1000
+  );
+  gameOverOverlay.style.display = 'none';
+
+  clearCollectibles();
+  clearRings();
+  spawnCollectibles(TOTAL_COLLECTIBLES);
+  spawnBoostRings(TOTAL_BOOST_RINGS);
+
+  drone.position.set(0, 1, 0);
+  input = { x: 0, y: 0, rx: 0, ry: 0, up: false, down: false };
+  boostFlashes = [];
+  updateHud();
+}
+
+function endGame(message) {
+  if (gameOver) return;
+  gameOver = true;
+  speedBoostEndTime = 0;
+  input = { x: 0, y: 0, rx: 0, ry: 0, up: false, down: false };
+  showGameOver(message);
+  updateHud();
+}
+
+function isCollectibleSpawnBlocked(x, y, z) {
+  for (const building of buildings) {
+    if (
+      Math.abs(x - building.pos.x) < building.size.x / 2 + 2.0 &&
+      Math.abs(y - building.pos.y) < building.size.y / 2 + 2.0 &&
+      Math.abs(z - building.pos.z) < building.size.z / 2 + 2.0
+    ) {
+      return true;
+    }
+  }
+
+  for (const mountain of mountains) {
+    const dx = x - mountain.pos.x;
+    const dz = z - mountain.pos.z;
+    const horizontalDist = Math.sqrt(dx * dx + dz * dz);
+
+    if (horizontalDist < mountain.radius + 1.5) {
+      return true;
+    }
+  }
+
+  for (const tree of trees) {
+    const dx = x - tree.pos.x;
+    const dz = z - tree.pos.z;
+    const horizontalDist = Math.sqrt(dx * dx + dz * dz);
+
+    if (horizontalDist < tree.radius + 1.4) {
+      return true;
+    }
+  }
+
+  for (const rock of rocks) {
+    const dx = x - rock.pos.x;
+    const dy = y - rock.pos.y;
+    const dz = z - rock.pos.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    if (dist < rock.radius + 1.2) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function createCollectible(x, y, z) {
+  const radius = 0.55;
+  const hue = Math.floor(Math.random() * 360);
+  const color = new THREE.Color(`hsl(${hue}, 95%, 60%)`);
+  const geo = new THREE.SphereGeometry(radius, 18, 18);
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 1.0,
+    roughness: 0.2,
+    metalness: 0.0
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, y, z);
+
+  const light = new THREE.PointLight(color, 1.4, 9);
+  light.position.copy(mesh.position);
+
+  scene.add(mesh);
+  scene.add(light);
+
+  collectibles.push({
+    mesh,
+    light,
+    radius,
+    glowSeed: Math.random() * Math.PI * 2,
+    active: true
+  });
+}
+
+function spawnCollectibles(count) {
+  let spawned = 0;
+  let attempts = 0;
+  const maxAttempts = count * 50;
+  const gridSize = 200; // Divide map into grid for even distribution
+  const cols = Math.ceil(600 / gridSize);
+  const rows = Math.ceil(600 / gridSize);
+  const positions = [];
+
+  // Create grid of potential positions
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const centerX = (col - cols / 2) * gridSize;
+      const centerZ = (row - rows / 2) * gridSize;
+      const offsetX = (Math.random() - 0.5) * gridSize * 0.8;
+      const offsetZ = (Math.random() - 0.5) * gridSize * 0.8;
+      positions.push({ x: centerX + offsetX, z: centerZ + offsetZ });
+    }
+  }
+
+  // Shuffle and try to spawn in grid cells
+  for (let i = positions.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [positions[i], positions[j]] = [positions[j], positions[i]];
+  }
+
+  for (const pos of positions) {
+    if (spawned >= count) break;
+
+    const x = pos.x;
+    const z = pos.z;
+    const y = terrainHeightAt(x, z) + 1.2 + Math.random() * 6;
+
+    if (!isCollectibleSpawnBlocked(x, y, z)) {
+      createCollectible(x, y, z);
+      spawned += 1;
+    }
+  }
+
+  remainingCollectibles = collectibles.filter((c) => c.active).length;
+}
+
+function createBoostRing(x, y, z, yaw) {
+  const ringRadius = 1.55;
+  const tubeRadius = 0.12;
+
+  const ringGeo = new THREE.TorusGeometry(ringRadius, tubeRadius, 18, 48);
+  const ringMat = new THREE.MeshStandardMaterial({
+    color: 0xffdd33,
+    emissive: 0xffc300,
+    emissiveIntensity: 1.2,
+    roughness: 0.25,
+    metalness: 0.1
+  });
+  const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+
+  const ringLight = new THREE.PointLight(0xffd84d, 1.8, 14);
+  ringLight.position.set(0, 0, 0);
+
+  const group = new THREE.Group();
+  group.add(ringMesh);
+  group.add(ringLight);
+  group.position.set(x, y, z);
+  group.rotation.set(0, yaw, 0);
+
+  scene.add(group);
+
+  rings.push({
+    group,
+    ringMesh,
+    ringLight,
+    radius: ringRadius,
+    tubeRadius,
+    active: true,
+    glowSeed: Math.random() * Math.PI * 2
+  });
+}
+
+function spawnBoostRings(count) {
+  let spawned = 0;
+  let attempts = 0;
+  const maxAttempts = count * 70;
+
+  while (spawned < count && attempts < maxAttempts) {
+    attempts += 1;
+
+    const x = (Math.random() - 0.5) * 500;
+    const z = (Math.random() - 0.5) * 500;
+    const y = terrainHeightAt(x, z) + 2.2 + Math.random() * 5.5;
+
+    if (isCollectibleSpawnBlocked(x, y, z)) {
+      continue;
+    }
+
+    let tooClose = false;
+    for (const ring of rings) {
+      if (ring.group.position.distanceToSquared(new THREE.Vector3(x, y, z)) < 160) {
+        tooClose = true;
+        break;
+      }
+    }
+
+    if (tooClose) {
+      continue;
+    }
+
+    createBoostRing(x, y, z, Math.random() * Math.PI * 2);
+    spawned += 1;
+  }
+}
+
+function isBuildingSpawnBlocked(x, z) {
+  // Check if building would collide with mountains
+  for (const mountain of mountains) {
+    const dx = x - mountain.pos.x;
+    const dz = z - mountain.pos.z;
+    const horizontalDist = Math.sqrt(dx * dx + dz * dz);
+    // Building size is 3x3, add extra buffer
+    if (horizontalDist < mountain.radius + 5) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function createBuilding(x, z) {
   const geo = new THREE.BoxGeometry(3, 10, 3);
@@ -78,11 +415,19 @@ function createBuilding(x, z) {
   buildings.push({ pos: new THREE.Vector3(x, 5, z), size: new THREE.Vector3(3, 10, 3) });
 }
 
-for (let i = 0; i < 80; i++) {
+let buildingsSpawned = 0;
+let buildingAttempts = 0;
+const maxBuildingAttempts = 1000;
+
+while (buildingsSpawned < 80 && buildingAttempts < maxBuildingAttempts) {
+  buildingAttempts += 1;
   const x = (Math.random() - 0.5) * 300;
   const z = (Math.random() - 0.5) * 300;
 
-  createBuilding(x, z);
+  if (!isBuildingSpawnBlocked(x, z)) {
+    createBuilding(x, z);
+    buildingsSpawned += 1;
+  }
 }
 
 for (let i = 0; i < 200; i++) {
@@ -212,6 +557,10 @@ const floor = new THREE.Mesh(floorGeo, floorMat);
 floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
 
+spawnCollectibles(TOTAL_COLLECTIBLES);
+spawnBoostRings(TOTAL_BOOST_RINGS);
+updateHud();
+
 // drone (kubus voorlopig)
 const droneGeo = new THREE.BoxGeometry(1, 0.3, 1);
 const droneMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
@@ -222,7 +571,6 @@ loader.load('./drone/zala_421_16e2/scene.gltf', (gltf) => {
   droneModel = gltf.scene;
   droneModel.scale.set(2, 2, 2);
   droneModel.position.set(0, 0, 0);
-  // GLTF model forward axis correction + 180deg flip.
   droneModel.rotation.y = -Math.PI / 2;
   droneMat.visible = false;
   drone.add(droneModel);
@@ -236,12 +584,18 @@ drone.position.y = 1;
 camera.position.set(0, 3, 5);
 
 const droneRadius = 0.7;
+const wingRadius = 0.25;
+const wingOffset = 0.55;
 
 // controls
 const keys = {};
 
 window.addEventListener('keydown', (e) => {
   keys[e.key.toLowerCase()] = true;
+
+  if (e.key.toLowerCase() === 'r' && gameOver) {
+    restartGame();
+  }
 });
 
 window.addEventListener('keyup', (e) => {
@@ -260,6 +614,49 @@ let lookYFiltered = 0;
 function animate() {
   requestAnimationFrame(animate);
 
+  if (!gameOver) {
+    if (performance.now() >= gameEndTime) {
+      endGame('Tijd is voorbij.');
+    }
+  }
+
+  updateHud();
+
+  const pulseTime = performance.now() * 0.005;
+  for (const collectible of collectibles) {
+    if (!collectible.active) continue;
+
+    const pulse = 0.8 + Math.sin(pulseTime + collectible.glowSeed) * 0.25;
+    collectible.mesh.material.emissiveIntensity = pulse;
+    collectible.light.intensity = 1.1 + pulse * 0.9;
+  }
+
+  for (const ring of rings) {
+    if (!ring.active) continue;
+
+    const ringPulse = 0.95 + Math.sin(pulseTime + ring.glowSeed) * 0.25;
+    ring.ringMesh.material.emissiveIntensity = ringPulse;
+    ring.ringLight.intensity = 1.2 + ringPulse * 0.8;
+    ring.group.rotation.z += 0.006;
+  }
+
+  for (let i = 0; i < boostFlashes.length; i++) {
+    const flash = boostFlashes[i];
+    if (flash.done) continue;
+
+    const elapsed = performance.now() - flash.birthTime;
+    const progress = elapsed / flash.duration;
+
+    if (progress >= 1) {
+      flash.mesh.visible = false;
+      flash.done = true;
+    } else {
+      flash.mesh.visible = true;
+      flash.mesh.scale.set(1 + progress * 0.5, 1 + progress * 0.5, 1 + progress * 0.5);
+      flash.mesh.material.opacity = 0.8 * (1 - progress);
+    }
+  }
+
   // Cloud drift
   for (const cloud of clouds) {
     cloud.position.x += 0.03;
@@ -269,8 +666,9 @@ function animate() {
   }
 
   // Move with analog joystick input from phone.
-  const moveX = Math.abs(input.x || 0) > CONTROL_TUNING.moveDeadZone ? (input.x || 0) : 0;
-  const moveY = Math.abs(input.y || 0) > CONTROL_TUNING.moveDeadZone ? (input.y || 0) : 0;
+  const moveX = !gameOver && Math.abs(input.x || 0) > CONTROL_TUNING.moveDeadZone ? (input.x || 0) : 0;
+  const moveY = !gameOver && Math.abs(input.y || 0) > CONTROL_TUNING.moveDeadZone ? (input.y || 0) : 0;
+  const speedMultiplier = !gameOver && performance.now() < speedBoostEndTime ? BOOST_MULTIPLIER : 1;
 
   // Save previous position for collision revert
   const prevX = drone.position.x;
@@ -285,11 +683,11 @@ function animate() {
   const rightX = Math.cos(cameraYaw);
   const rightZ = -Math.sin(cameraYaw);
 
-  drone.position.x += (forwardX * forwardInput + rightX * rightInput) * CONTROL_TUNING.moveSpeed;
-  drone.position.z += (forwardZ * forwardInput + rightZ * rightInput) * CONTROL_TUNING.moveSpeed;
+  drone.position.x += (forwardX * forwardInput + rightX * rightInput) * CONTROL_TUNING.moveSpeed * speedMultiplier;
+  drone.position.z += (forwardZ * forwardInput + rightZ * rightInput) * CONTROL_TUNING.moveSpeed * speedMultiplier;
 
-  if (input.up) drone.position.y += CONTROL_TUNING.verticalSpeed;
-  if (input.down) drone.position.y -= CONTROL_TUNING.verticalSpeed;
+  if (!gameOver && input.up) drone.position.y += CONTROL_TUNING.verticalSpeed * speedMultiplier;
+  if (!gameOver && input.down) drone.position.y -= CONTROL_TUNING.verticalSpeed * speedMultiplier;
 
   // Keep the drone above the ground surface.
   const groundHeight = terrainHeightAt(drone.position.x, drone.position.z);
@@ -299,6 +697,39 @@ function animate() {
   // Collision detection and prevention
   const dronePos = drone.position;
   let hasCollision = false;
+  
+  // Calculate wing tip positions in world space
+  const getRightWingPos = () => {
+    const wingX = Math.cos(drone.rotation.y) * wingOffset;
+    const wingZ = Math.sin(drone.rotation.y) * wingOffset;
+    return new THREE.Vector3(dronePos.x + wingX, dronePos.y, dronePos.z + wingZ);
+  };
+
+  const getLeftWingPos = () => {
+    const wingX = Math.cos(drone.rotation.y) * -wingOffset;
+    const wingZ = Math.sin(drone.rotation.y) * -wingOffset;
+    return new THREE.Vector3(dronePos.x + wingX, dronePos.y, dronePos.z + wingZ);
+  };
+
+  const checkWingCollision = (wingPos) => {
+    for (const building of buildings) {
+      const dx = wingPos.x - building.pos.x, dy = wingPos.y - building.pos.y, dz = wingPos.z - building.pos.z;
+      if (Math.abs(dx) < building.size.x / 2 + wingRadius && Math.abs(dy) < building.size.y / 2 + wingRadius && Math.abs(dz) < building.size.z / 2 + wingRadius) return true;
+    }
+    for (const mountain of mountains) {
+      const dx = wingPos.x - mountain.pos.x, dz = wingPos.z - mountain.pos.z, d = Math.sqrt(dx * dx + dz * dz);
+      if (d < mountain.radius && wingPos.y < mountain.height * (1 - d / mountain.radius) + wingRadius) return true;
+    }
+    for (const tree of trees) {
+      const dx = wingPos.x - tree.pos.x, dz = wingPos.z - tree.pos.z, d = Math.sqrt(dx * dx + dz * dz);
+      if (d < tree.radius + wingRadius && wingPos.y > tree.pos.y - tree.height / 2 - wingRadius && wingPos.y < tree.pos.y + tree.height / 2 + wingRadius) return true;
+    }
+    for (const rock of rocks) {
+      const dx = wingPos.x - rock.pos.x, dy = wingPos.y - rock.pos.y, dz = wingPos.z - rock.pos.z, d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (d < rock.radius + wingRadius) return true;
+    }
+    return false;
+  };
   
   for (const building of buildings) {
     const dx = dronePos.x - building.pos.x;
@@ -357,6 +788,14 @@ function animate() {
       }
     }
   }
+
+  if (!hasCollision) {
+    const rightWing = getRightWingPos();
+    const leftWing = getLeftWingPos();
+    if (checkWingCollision(rightWing) || checkWingCollision(leftWing)) {
+      hasCollision = true;
+    }
+  }
   
   // Revert position if collision detected
   if (hasCollision) {
@@ -365,9 +804,50 @@ function animate() {
     drone.position.z = prevZ;
   }
 
+  if (!gameOver) {
+    for (const collectible of collectibles) {
+      if (!collectible.active) continue;
+
+      const distance = drone.position.distanceTo(collectible.mesh.position);
+
+      if (distance < droneRadius + collectible.radius) {
+        collectible.active = false;
+        collectible.mesh.visible = false;
+        collectible.light.visible = false;
+        collectible.light.intensity = 0;
+        score += 1;
+        remainingCollectibles -= 1;
+        gameEndTime = Math.min(
+          gameEndTime + TIME_BONUS_PER_COLLECT_MS,
+          performance.now() + MAX_GAME_TIME_SECONDS * 1000
+        );
+      }
+    }
+
+    for (const ring of rings) {
+      if (!ring.active) continue;
+
+      const localDronePos = ring.group.worldToLocal(drone.position.clone());
+      const radialDistance = Math.hypot(localDronePos.x, localDronePos.y);
+      const passDepth = Math.abs(localDronePos.z);
+      const ringOuterRadius = ring.radius + ring.tubeRadius;
+
+      if (radialDistance < ringOuterRadius && passDepth < 0.8) {
+        ring.active = false;
+        ring.group.visible = false;
+        speedBoostEndTime = Math.max(speedBoostEndTime, performance.now()) + BOOST_DURATION_MS;
+        createBoostFlash();
+      }
+    }
+
+    if (remainingCollectibles === 0) {
+      endGame('Je hebt alle bolletjes geraakt!');
+    }
+  }
+
   // Right joystick controls camera orbit around the drone.
-  const lookX = Math.abs(input.rx || 0) > CONTROL_TUNING.lookDeadZone ? (input.rx || 0) : 0;
-  const lookY = Math.abs(input.ry || 0) > CONTROL_TUNING.lookDeadZone ? (input.ry || 0) : 0;
+  const lookX = !gameOver && Math.abs(input.rx || 0) > CONTROL_TUNING.lookDeadZone ? (input.rx || 0) : 0;
+  const lookY = !gameOver && Math.abs(input.ry || 0) > CONTROL_TUNING.lookDeadZone ? (input.ry || 0) : 0;
 
   lookXFiltered += (lookX - lookXFiltered) * CONTROL_TUNING.lookSmoothing;
   lookYFiltered += (lookY - lookYFiltered) * CONTROL_TUNING.lookSmoothing;

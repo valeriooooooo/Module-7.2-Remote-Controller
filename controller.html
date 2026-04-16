@@ -24,6 +24,17 @@
     width: 90vw;
   }
 
+  #status {
+    position: absolute;
+    left: 50%;
+    top: 38px;
+    transform: translateX(-50%);
+    opacity: 0.95;
+    font-size: 13px;
+    text-align: center;
+    width: 90vw;
+  }
+
   #landscapeWarning {
     position: fixed;
     inset: 0;
@@ -78,11 +89,11 @@
   }
 
   .altitude button {
-    width: min(24vw, 130px);
-    height: min(16vw, 88px);
+    width: min(19vw, 104px);
+    height: min(12vw, 66px);
     border: 0;
     border-radius: 14px;
-    font-size: clamp(15px, 3.2vw, 20px);
+    font-size: clamp(13px, 2.6vw, 17px);
     font-weight: 700;
     color: #fff;
     background: linear-gradient(180deg, #393939, #1f1f1f);
@@ -109,6 +120,7 @@
 <body>
 
 <div id="hint">Links: bewegen, Rechts: camera, Knoppen: omhoog/omlaag</div>
+<div id="status">Verbinden met server...</div>
 <div id="landscapeWarning">Draai je telefoon horizontaal voor betere joystick-besturing</div>
 
 <div class="controls">
@@ -126,9 +138,24 @@
 
 <script>
 const socket = new WebSocket(`ws://${location.hostname}:8080`);
+const statusEl = document.getElementById('status');
+
+function setStatus(text, color) {
+  statusEl.textContent = text;
+  statusEl.style.color = color;
+}
 
 socket.onopen = () => {
+  setStatus('Verbonden', '#70ff92');
   socket.send(JSON.stringify({ type: 'phone' }));
+};
+
+socket.onclose = () => {
+  setStatus('Verbinding verbroken', '#ff7a7a');
+};
+
+socket.onerror = () => {
+  setStatus('Kan server niet bereiken', '#ff7a7a');
 };
 
 const warning = document.getElementById('landscapeWarning');
